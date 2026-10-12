@@ -55,6 +55,21 @@
             font-size: clamp(1.5rem, 4vw, 2.2rem);
         }
 
+        .brand-name {
+            display: block;
+            color: var(--orange);
+            font-size: clamp(1.5rem, 4vw, 2.2rem);
+            font-weight: bold;
+        }
+
+        .brand-subtitle {
+            display: block;
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: .85rem;
+            font-weight: normal;
+        }
+
         header p {
             color: var(--muted);
             margin-top: 6px;
@@ -87,6 +102,7 @@
         }
 
         input[type="file"],
+        input[type="url"],
         select,
         button {
             width: 100%;
@@ -95,6 +111,7 @@
         }
 
         input[type="file"],
+        input[type="url"],
         select {
             border: 1px solid var(--border);
             background: var(--panel-light);
@@ -234,6 +251,17 @@
             margin-top: 15px;
         }
 
+        footer {
+            padding: 22px 0 8px;
+            color: var(--muted);
+            text-align: center;
+            font-size: .9rem;
+        }
+
+        footer strong {
+            color: var(--orange);
+        }
+
         @media (max-width: 800px) {
             header,
             .layout {
@@ -254,7 +282,8 @@
     <main class="container">
         <header>
             <div>
-                <h1>🟠 Document Converter</h1>
+                <span class="brand-name">Zavoka</span>
+                <span class="brand-subtitle">Doc. Converter</span>
                 <p>Convert Markdown, PDF and text-based DOC files in your browser.</p>
             </div>
             <button class="secondary" id="clearButton">Clear</button>
@@ -264,8 +293,12 @@
             <aside class="panel">
                 <h2>Conversion options</h2>
 
+                <label for="urlInput">Paste a webpage or file URL</label>
+                <input id="urlInput" type="url" placeholder="https://example.com/document.pdf" autocomplete="url">
+                <button id="loadUrlButton" class="secondary">Load URL</button>
+
                 <label for="fileInput">Choose a file</label>
-                <input id="fileInput" type="file" accept=".md,.markdown,.txt,.doc,.pdf,.jpg,.jpeg,.png">
+                <input id="fileInput" type="file" accept=".md,.markdown,.txt,.doc,.pdf,.html,.htm,.csv,.xls,.xlsx,.jpg,.jpeg,.png">
 
                 <label for="formatSelect">Convert to</label>
                 <select id="formatSelect">
@@ -283,8 +316,7 @@
                 </div>
 
                 <p class="note">
-                    PDF text extraction uses PDF.js. DOC files are treated as text-based documents.
-                    JPG-to-text conversion requires OCR and is not performed without an OCR service.
+                    URL loading works only when the website allows browser access (CORS). Webpages and CSV files can be converted as text; binary Excel files (XLS/XLSX) and image-to-text conversion need additional parsers or OCR.
                 </p>
             </aside>
 
@@ -300,10 +332,13 @@
                 </div>
             </section>
         </section>
+        <footer>Created with ❤️ by <strong>Zavoka Doc. Converter</strong></footer>
     </main>
 
     <script>
         const fileInput = document.getElementById("fileInput");
+        const urlInput = document.getElementById("urlInput");
+        const loadUrlButton = document.getElementById("loadUrlButton");
         const formatSelect = document.getElementById("formatSelect");
         const convertButton = document.getElementById("convertButton");
         const previewButton = document.getElementById("previewButton");
@@ -336,6 +371,7 @@
 
         previewButton.addEventListener("click", previewFile);
         convertButton.addEventListener("click", convertFile);
+        loadUrlButton.addEventListener("click", loadUrl);
 
         clearButton.addEventListener("click", () => {
             selectedFile = null;
@@ -352,6 +388,61 @@
 
         function extension(file) {
             return file.name.split(".").pop().toLowerCase();
+        }
+
+        async function loadUrl() {
+            const value = urlInput.value.trim();
+            if (!value) {
+                setStatus("Paste a webpage or file URL first.", "error");
+                return;
+            }
+
+            try {
+                const url = new URL(value);
+                if (!["http:", "https:"].includes(url.protocol)) {
+                    throw new Error("Please enter an HTTP or HTTPS URL.");
+                }
+
+                setStatus("Loading URL…");
+                const response = await fetch(url.href);
+                if (!response.ok) {
+                    throw new Error(`Could not load URL (HTTP ${response.status}).`);
+                }
+
+                const blob = await response.blob();
+                const pathName = decodeURIComponent(url.pathname.split("/").pop() || "");
+                const contentType = (response.headers.get("content-type") || blob.type).toLowerCase();
+                const isWebpage = contentType.includes("text/html") || !pathName.includes(".");
+                const extensionFromType = contentType.includes("pdf") ? "pdf"
+                    : contentType.includes("markdown") ? "md"
+                    : contentType.includes("csv") ? "csv"
+                    : contentType.includes("png") ? "png"
+                    : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg"
+                    : contentType.includes("spreadsheetml") ? "xlsx"
+                    : contentType.includes("ms-excel") ? "xls"
+                    : contentType.includes("html") ? "html"
+                    : contentType.includes("text/plain") ? "txt" : "";
+                const webpageName = pathName && /\.html?$/i.test(pathName)
+                    ? pathName
+                    : `${pathName ? pathName.replace(/\.[^.]+$/, "") : "webpage"}.html`;
+                const name = isWebpage ? webpageName
+                    : pathName || `download.${extensionFromType || "txt"}`;
+
+                if (!isWebpage && !extensionFromType && !/\.(md|markdown|txt|doc|pdf|html|htm|csv|xls|xlsx|jpg|jpeg|png)$/i.test(name)) {
+                    throw new Error("This URL format is not supported.");
+                }
+
+                selectedFile = new File([blob], name, { type: contentType || "application/octet-stream" });
+                sourceText = "";
+                sourceHtml = "";
+                fileInput.value = "";
+                await previewFile();
+            } catch (error) {
+                const message = error instanceof TypeError
+                    ? "Could not access this URL. The site may block browser requests (CORS)."
+                    : error.message;
+                setStatus(message, "error");
+            }
         }
 
         function setStatus(message, type = "") {
@@ -390,8 +481,19 @@
         async function getText(file) {
             const ext = extension(file);
 
-            if (["md", "markdown", "txt", "doc"].includes(ext)) {
+            if (["md", "markdown", "txt", "doc", "csv"].includes(ext)) {
                 return await file.text();
+            }
+
+            if (["html", "htm"].includes(ext)) {
+                const html = await file.text();
+                const documentFromFile = new DOMParser().parseFromString(html, "text/html");
+                documentFromFile.querySelectorAll("script, style, noscript, iframe").forEach(node => node.remove());
+                return documentFromFile.body.innerText || documentFromFile.body.textContent || "";
+            }
+
+            if (["xls", "xlsx"].includes(ext)) {
+                throw new Error("Binary Excel files (XLS/XLSX) need a spreadsheet parser. CSV files are supported.");
             }
 
             if (ext === "pdf") {
@@ -522,6 +624,34 @@
         }
 
         async function createJpg(text, baseName) {
+            if (["jpg", "jpeg", "png"].includes(extension(selectedFile))) {
+                const imageUrl = URL.createObjectURL(selectedFile);
+                const image = new Image();
+                await new Promise((resolve, reject) => {
+                    image.onload = () => {
+                        const imageCanvas = document.createElement("canvas");
+                        imageCanvas.width = image.naturalWidth;
+                        imageCanvas.height = image.naturalHeight;
+                        imageCanvas.getContext("2d").drawImage(image, 0, 0);
+                        imageCanvas.toBlob(blob => {
+                            URL.revokeObjectURL(imageUrl);
+                            if (!blob) {
+                                reject(new Error("Could not convert this image to JPG."));
+                                return;
+                            }
+                            downloadBlob(blob, `${baseName}.jpg`, "image/jpeg");
+                            resolve();
+                        }, "image/jpeg", 0.92);
+                    };
+                    image.onerror = () => {
+                        URL.revokeObjectURL(imageUrl);
+                        reject(new Error("Could not read this image."));
+                    };
+                    image.src = imageUrl;
+                });
+                return;
+            }
+
             const canvas = document.createElement("canvas");
             const context = canvas.getContext("2d");
             const lines = String(text || "").split("\n");
